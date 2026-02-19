@@ -625,6 +625,58 @@ class Executive:
         "Unregister the Idb Adapter.  Link objects and Idb then subject to GC"
         self.rpchandler.unregister(idb_adap_oid)
 
+    # ---- TraceLab timeline tracer hooks (no UI dependency) ----
+    # These methods are intentionally small and RPC-friendly (pickleable types).
+
+    def start_timeline_tracing(
+        self,
+        *,
+        max_events: int = 2000,
+        on_overflow: str = "stop",
+        capture_locals: bool = True,
+        capture_globals: bool = True,
+        max_snapshot_items: int = 25,
+        max_repr: int = 200,
+    ):
+        from idlelib import timeline_tracer
+
+        timeline_tracer.start(
+            max_events=max_events,
+            on_overflow=on_overflow,
+            capture_locals=capture_locals,
+            capture_globals=capture_globals,
+            max_snapshot_items=max_snapshot_items,
+            max_repr=max_repr,
+        )
+        return True
+
+    def stop_timeline_tracing(self):
+        from idlelib import timeline_tracer
+
+        timeline_tracer.stop()
+        return True
+
+    def clear_timeline_events(self):
+        from idlelib import timeline_tracer
+
+        timeline_tracer.clear()
+        return True
+
+    def get_timeline_events(self):
+        from idlelib import timeline_tracer
+
+        return timeline_tracer.get_events()
+
+    def timeline_tracing_status(self):
+        from idlelib import timeline_tracer
+
+        events = timeline_tracer.get_events()
+        return {
+            "running": timeline_tracer.is_running(),
+            "overflowed": timeline_tracer.overflowed(),
+            "event_count": len(events),
+        }
+
     def get_the_calltip(self, name):
         return self.calltip.fetch_tip(name)
 
