@@ -1,348 +1,198 @@
 """Timeline panel UI for visualizing execution steps and local variables.
 
-This module provides a standalone Tkinter panel (TimelinePanel) that displays
-a list of execution steps captured by the timeline tracer, and shows local
-variables for the currently selected step.
+This module is intentionally independent of IDLE integration. It provides a
+pure-Tkinter panel (TimelinePanel) with two main areas:
 
-No external dependencies; uses only stdlib Tkinter.
-Data format agnostic — designed to integrate with timeline_tracer.py later.
+- Left: a list of execution steps
+- Right: locals snapshot and a diff summary for the selected step
+
+The panel is designed to consume the step dicts produced by
+`idlelib.timeline_pipeline.events_to_steps()`.
 """
 
-from tkinter import Tk, Toplevel, Frame, Label, Listbox, Text, Scrollbar
-from tkinter import END, BOTH, LEFT, RIGHT, VERTICAL, DISABLED, NORMAL, Y
+from __future__ import annotations
+
+import os
+import tkinter as tk
+from tkinter import ttk
+from typing import Any
 
 
-class TimelinePanel:
-    """Standalone Tkinter panel for timeline step visualization.
-    
-    Displays a list of execution steps and details (locals) for the selected step.
-    
-    Args:
-        master: Optional parent Tkinter widget. If None, creates own Toplevel window.
-        on_select: Optional callback fn(step_index, step_dict) fired on step selection.
-    
-    Public methods:
-        set_steps(steps): Replace internal step list and reset selection.
-        select_step(i): Select step at index i, update details, fire callback.
-        clear(): Clear all steps and details (optional).
-    """
-    
-    def __init__(self, master=None, on_select=None):
-        """Initialize TimelinePanel.
-        
-        Args:
-            master: Parent widget or None (creates Toplevel).
-            on_select: Optional selection callback(index, step_dict).
-        """
-        # Set up root window
+class TimelinePanel(tk.Frame):
+    """A Tkinter panel for displaying a variable timeline."""
+
+    def __init__(self, master: tk.Misc | None = None, *, on_select=None) -> None:
         if master is None:
-            self.root = Toplevel()
-            self.root.title("Timeline View")
-            self.root.geometry("700x500")
+            root = tk.Toplevel()
+            super().__init__(root)
+            root.title("Timeline")
+            root.geometry("900x600")
+            self._owns_toplevel = True
         else:
-            self.root = master
-        
-        # State
-        self.steps = []
-        self.current_index = -1
-        self.on_select = on_select
-        
-        # Build UI
+            super().__init__(master)
+            self._owns_toplevel = False
+
+        self._on_select = on_select
+        self._steps: list[dict[str, Any]] = []
+
         self._build_ui()
-    
-    def _build_ui(self):
-        """Build the panel layout: header + list + details."""
-        # Top frame: step counter label
-        self.top_frame = Frame(self.root)
-        self.top_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
-        
-        self.step_label = Label(self.top_frame, text="Steps: 0 / 0", font=("TkDefaultFont", 10))
-        self.step_label.pack(side=LEFT)
-        
-        # List frame: Listbox + Scrollbar
-        self.list_frame = Frame(self.root)
-        self.list_frame.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=5, pady=5)
-        
-        self.listbox = Listbox(
-            self.list_frame,
-            width=80,
-            height=15,
-            exportselection=0,
-            background="white"
-        )
-        self.listbox.pack(side=LEFT, fill=BOTH, expand=True)
-        
-        self.vbar = Scrollbar(self.list_frame, orient=VERTICAL)
-        self.vbar.pack(side=RIGHT, fill=Y)
-        
-        # Link scrollbar to listbox
-        self.listbox.config(yscrollcommand=self.vbar.set)
-        self.vbar.config(command=self.listbox.yview)
-        
-        # Bind listbox selection event
-        self.listbox.bind("<<ListboxSelect>>", self._on_step_select)
-        
-        # Details frame: label + Text widget
-        self.details_frame = Frame(self.root)
-        self.details_frame.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=5, pady=5)
-        
-        self.details_label = Label(self.details_frame, text="Locals:", font=("TkDefaultFont", 10, "bold"))
-        self.details_label.pack(side=LEFT, anchor="nw")
-        
-        # Text widget for details (readonly)
-        self.details_text = Text(
-            self.details_frame,
-            width=80,
-            height=10,
-            background="white",
-            state=DISABLED
-        )
-        self.details_text.pack(side=LEFT, fill=BOTH, expand=True)
-        
-        # Configure grid weights for resizing
-        self.root.grid_rowconfigure(1, weight=1)
-        self.root.grid_columnconfigure(0, weight=1)
-    
-    def set_steps(self, steps):
-        """Replace internal step list with new steps and reset selection.
-        
-        Args:
-            steps: list[dict] where each dict has:
-                - step (int): execution step number
-                - filename (str): source file path
-                - lineno (int): line number
-                - funcname (str): function name
-                - locals (dict[str, str] or None): variable name -> repr'd value
-                - globals (dict[str, str] or None): reserved (not displayed week 1)
-                - t_ns (int, optional): nanosecond timestamp
-        """
-        self.steps = steps if steps else []
-        self.current_index = -1
-        
-        # Clear listbox
-        self.listbox.delete(0, END)
-        
-        # Populate listbox with formatted step strings
-        for idx, step in enumerate(self.steps):
-            display_str = self._format_step_display(step)
-            self.listbox.insert(END, display_str)
-        
-        # Update label
-        self.step_label.config(text=f"Steps: 0 / {len(self.steps)}")
-        
-        # Clear details
-        self._clear_details()
-    
-    def select_step(self, i):
-        """Select step at index i and update details panel.
-        
-        Args:
-            i: int, 0-indexed step number. Out-of-range calls are no-ops.
-        """
-        if not (0 <= i < len(self.steps)):
-            return  # Silent no-op for out-of-range
-        
-        self.current_index = i
-        
-        # Update listbox selection
-        self.listbox.selection_clear(0, END)
-        self.listbox.selection_set(i)
-        self.listbox.see(i)  # Autoscroll to visible
-        
-        # Update details panel
-        self._update_details()
-        
-        # Fire callback if set
-        if self.on_select:
-            self.on_select(i, self.steps[i])
-    
-    def clear(self):
-        """Clear all steps and reset details (optional utility)."""
-        self.set_steps([])
-    
-    def _on_step_select(self, event):
-        """Event handler for Listbox selection (<<ListboxSelect>>)."""
-        sel = self.listbox.curselection()
-        if sel:
-            self.select_step(sel[0])
-    
-    def _update_details(self):
-        """Update details panel with locals from current step."""
-        if self.current_index < 0 or self.current_index >= len(self.steps):
-            self._clear_details()
+        self.pack(fill="both", expand=True)
+
+    def _build_ui(self) -> None:
+        self.columnconfigure(0, weight=1)
+        self.columnconfigure(1, weight=2)
+        self.rowconfigure(0, weight=1)
+
+        # Left: step list
+        left = ttk.Frame(self)
+        left.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        left.rowconfigure(1, weight=1)
+        left.columnconfigure(0, weight=1)
+
+        self._title = ttk.Label(left, text="Steps", font=("TkDefaultFont", 10, "bold"))
+        self._title.grid(row=0, column=0, sticky="w", pady=(0, 6))
+
+        self._list = tk.Listbox(left, activestyle="dotbox", exportselection=False)
+        self._list.grid(row=1, column=0, sticky="nsew")
+        self._list.bind("<<ListboxSelect>>", self._on_list_select)
+
+        list_scroll = ttk.Scrollbar(left, orient="vertical", command=self._list.yview)
+        list_scroll.grid(row=1, column=1, sticky="ns")
+        self._list.configure(yscrollcommand=list_scroll.set)
+
+        # Right: details
+        right = ttk.Frame(self)
+        right.grid(row=0, column=1, sticky="nsew", padx=(0, 8), pady=8)
+        right.rowconfigure(1, weight=1)
+        right.columnconfigure(0, weight=1)
+
+        self._header = ttk.Label(right, text="No step selected", font=("TkDefaultFont", 10, "bold"))
+        self._header.grid(row=0, column=0, sticky="w", pady=(0, 6))
+
+        self._details = tk.Text(right, wrap="none", height=10)
+        self._details.grid(row=1, column=0, sticky="nsew")
+        self._details.configure(state="disabled")
+
+        details_scroll = ttk.Scrollbar(right, orient="vertical", command=self._details.yview)
+        details_scroll.grid(row=1, column=1, sticky="ns")
+        self._details.configure(yscrollcommand=details_scroll.set)
+
+    def set_steps(self, steps: list[dict[str, Any]]) -> None:
+        """Accept UI-ready step dicts and populate the step list."""
+        self._steps = list(steps or [])
+
+        self._list.delete(0, tk.END)
+        for step in self._steps:
+            self._list.insert(tk.END, self._format_step_row(step))
+
+        self._set_details(header="No step selected", body="")
+
+    def select_step(self, i: int) -> None:
+        """Select step at index i (0-based) and update details panel."""
+        if not (0 <= i < len(self._steps)):
             return
-        
-        step = self.steps[self.current_index]
-        
-        # Update header label with step info
-        step_num = step.get("step", self.current_index + 1)
-        funcname = step.get("funcname", "(unknown)")
-        filename = step.get("filename", "(unknown file)")
-        lineno = step.get("lineno", "?")
-        
-        self.step_label.config(
-            text=f"Step {step_num} / {len(self.steps)} | {funcname}() at {filename}:{lineno}"
-        )
-        
-        # Extract and format locals
-        locals_dict = step.get("locals")
-        
-        if locals_dict is None:
-            details_text = "(no locals captured)"
-        elif not isinstance(locals_dict, dict):
-            details_text = "(locals not a dict)"
-        elif not locals_dict:
-            details_text = "(locals empty)"
+
+        self._list.selection_clear(0, tk.END)
+        self._list.selection_set(i)
+        self._list.see(i)
+
+        step = self._steps[i]
+        header = self._format_step_header(step, i=i)
+        body = self._format_step_details(step)
+        self._set_details(header=header, body=body)
+
+        cb = self._on_select
+        if cb is not None:
+            try:
+                cb(i, step)
+            except Exception:
+                pass
+
+    def _on_list_select(self, _event) -> None:
+        sel = self._list.curselection()
+        if sel:
+            self.select_step(int(sel[0]))
+
+    def _set_details(self, *, header: str, body: str) -> None:
+        self._header.configure(text=header)
+        self._details.configure(state="normal")
+        self._details.delete("1.0", tk.END)
+        if body:
+            self._details.insert("1.0", body)
+        self._details.configure(state="disabled")
+
+    def _format_step_row(self, step: dict[str, Any]) -> str:
+        index = step.get("index", "?")
+        funcname = step.get("funcname", "")
+        filename = step.get("filename", "")
+        lineno = step.get("lineno", "")
+
+        filepart = os.path.basename(filename) if filename else ""
+        if filepart:
+            return f"{index:>4}  {funcname}  {filepart}:{lineno}"
+        return f"{index:>4}  {funcname}"
+
+    def _format_step_header(self, step: dict[str, Any], *, i: int) -> str:
+        index = step.get("index", i)
+        funcname = step.get("funcname", "")
+        filename = step.get("filename", "")
+        lineno = step.get("lineno", "")
+        return f"Step {index}  {funcname}()  {filename}:{lineno}"
+
+    def _format_step_details(self, step: dict[str, Any]) -> str:
+        locals_map = step.get("locals") if isinstance(step.get("locals"), dict) else {}
+        diff_map = step.get("diff") if isinstance(step.get("diff"), dict) else {}
+
+        lines: list[str] = []
+
+        lines.append("Locals")
+        lines.append("-" * 60)
+        if locals_map:
+            for name in sorted(locals_map):
+                lines.append(f"{name} = {locals_map[name]}")
         else:
-            # Format as "key = value" per line
-            lines = []
-            for key in sorted(locals_dict.keys()):
-                value = locals_dict[key]
-                lines.append(f"{key} = {value}")
-            details_text = "\n".join(lines)
-        
-        # Update Text widget (enable → clear → insert → disable)
-        self.details_text.config(state=NORMAL)
-        self.details_text.delete(1.0, END)
-        self.details_text.insert(1.0, details_text)
-        self.details_text.config(state=DISABLED)
-    
-    def _clear_details(self):
-        """Clear details panel."""
-        self.step_label.config(text=f"Steps: 0 / {len(self.steps)}")
-        self.details_text.config(state=NORMAL)
-        self.details_text.delete(1.0, END)
-        self.details_text.config(state=DISABLED)
-    
-    def _format_step_display(self, step):
-        """Format step dict into a display string for the listbox.
-        
-        Args:
-            step: dict with step info
-        
-        Returns:
-            str formatted as "Step X | funcname() at filename:lineno"
-        """
-        try:
-            step_num = step.get("step", "?")
-            funcname = step.get("funcname", "(unknown)")
-            filename = step.get("filename", "(unknown file)")
-            lineno = step.get("lineno", "?")
-            return f"Step {step_num} | {funcname}() at {filename}:{lineno}"
-        except Exception:
-            return "Step ? | (malformed)"
+            lines.append("(empty)")
 
+        lines.append("")
+        lines.append("Diff vs previous step")
+        lines.append("-" * 60)
+        lines.extend(self._format_diff(diff_map))
 
-def main():
-    """Standalone demo: create window and show TimelinePanel."""
-    root = Tk()
-    root.withdraw()  # Hide root, use only Toplevel panel
-    
-    panel = TimelinePanel()
-    
-    # Mock steps (exact tracer dict format)
-    mock_steps = [
-        {
-            "step": 1,
-            "filename": "test.py",
-            "lineno": 5,
-            "funcname": "main",
-            "locals": {"x": "0", "result": "None"},
-            "globals": None,
-            "t_ns": 1000000,
-        },
-        {
-            "step": 2,
-            "filename": "test.py",
-            "lineno": 6,
-            "funcname": "main",
-            "locals": {"x": "1", "result": "None"},
-            "globals": None,
-            "t_ns": 2000000,
-        },
-        {
-            "step": 3,
-            "filename": "test.py",
-            "lineno": 7,
-            "funcname": "helper",
-            "locals": {"a": "10", "b": "20"},
-            "globals": None,
-            "t_ns": 3000000,
-        },
-        {
-            "step": 4,
-            "filename": "test.py",
-            "lineno": 8,
-            "funcname": "helper",
-            "locals": {"a": "10", "b": "20", "c": "30"},
-            "globals": None,
-            "t_ns": 4000000,
-        },
-        {
-            "step": 5,
-            "filename": "test.py",
-            "lineno": 9,
-            "funcname": "main",
-            "locals": {"x": "1", "result": "30"},
-            "globals": None,
-            "t_ns": 5000000,
-        },
-        {
-            "step": 6,
-            "filename": "test.py",
-            "lineno": 10,
-            "funcname": "main",
-            "locals": {"x": "2", "result": "30"},
-            "globals": None,
-            "t_ns": 6000000,
-        },
-        {
-            "step": 7,
-            "filename": "other.py",
-            "lineno": 15,
-            "funcname": "process",
-            "locals": {"data": "[1, 2, 3]", "count": "3"},
-            "globals": None,
-            "t_ns": 7000000,
-        },
-        {
-            "step": 8,
-            "filename": "other.py",
-            "lineno": 16,
-            "funcname": "process",
-            "locals": {"data": "[1, 2, 3]", "count": "3", "total": "6"},
-            "globals": None,
-            "t_ns": 8000000,
-        },
-        {
-            "step": 9,
-            "filename": "test.py",
-            "lineno": 11,
-            "funcname": "main",
-            "locals": {"x": "2", "result": "30", "final": "'done'"},
-            "globals": None,
-            "t_ns": 9000000,
-        },
-        {
-            "step": 10,
-            "filename": "test.py",
-            "lineno": 12,
-            "funcname": "main",
-            "locals": {},  # Empty locals
-            "globals": None,
-            "t_ns": 10000000,
-        },
-    ]
-    
-    # Set steps in panel
-    panel.set_steps(mock_steps)
-    
-    # Optional: select first step
-    panel.select_step(0)
-    
-    # Start mainloop
-    root.mainloop()
+        return "\n".join(lines).rstrip() + "\n"
 
+    def _format_diff(self, diff_map: dict[str, Any]) -> list[str]:
+        added = diff_map.get("added") if isinstance(diff_map.get("added"), dict) else {}
+        removed = diff_map.get("removed") if isinstance(diff_map.get("removed"), dict) else {}
+        changed = diff_map.get("changed") if isinstance(diff_map.get("changed"), dict) else {}
 
-if __name__ == "__main__":
-    main()
+        out: list[str] = []
+
+        if not (added or removed or changed):
+            return ["(no changes)"]
+
+        if added:
+            out.append("Added")
+            for name in sorted(added):
+                out.append(f"  + {name} = {added[name]}")
+            out.append("")
+
+        if removed:
+            out.append("Removed")
+            for name in sorted(removed):
+                out.append(f"  - {name} = {removed[name]}")
+            out.append("")
+
+        if changed:
+            out.append("Changed")
+            for name in sorted(changed):
+                entry = changed[name]
+                before = entry.get("before") if isinstance(entry, dict) else None
+                after = entry.get("after") if isinstance(entry, dict) else None
+                out.append(f"  * {name}: {before}  ->  {after}")
+            out.append("")
+
+        # Trim trailing blank
+        while out and out[-1] == "":
+            out.pop()
+        return out
+
