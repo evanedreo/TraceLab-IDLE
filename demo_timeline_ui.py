@@ -9,20 +9,35 @@ This script demonstrates the full end-to-end flow outside of IDLE integration:
 - Convert tracer events to UI-ready steps (locals + diff)
 - Launch the Tkinter timeline panel
 
-Recommended: run with the repo's built Python (uses configured Tkinter):
+Run from the repo root with a Python that has Tkinter support:
 
-  ./python demo_timeline_ui.py
+  python3.11 demo_timeline_ui.py
+  python3.10 demo_timeline_ui.py
 
-Or with system python (requires PYTHONPATH):
+If the default python3 has tkinter, you can also use:
 
-  PYTHONPATH=./Lib python3 demo_timeline_ui.py
-
-Or via one-liner from repo root:
-
-  python3 -c "import sys; sys.path.insert(0,'./Lib'); import demo_timeline_ui; demo_timeline_ui.main()"
+  python3 demo_timeline_ui.py
 """
 
-from tkinter import Tk
+import os
+import sys
+
+# Ensure idlelib modules are importable when running from the repo root.
+_idlelib_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Lib", "idlelib")
+if _idlelib_dir not in sys.path:
+    sys.path.insert(0, _idlelib_dir)
+
+try:
+    from tkinter import Tk
+except ImportError:
+    _hint = (
+        "Tkinter is not available in this Python ({}).\n"
+        "Try running with a Python that includes Tkinter, e.g.:\n"
+        "  python3.11 demo_timeline_ui.py\n"
+        "  python3.10 demo_timeline_ui.py"
+    ).format(sys.executable)
+    print(_hint, file=sys.stderr)
+    raise SystemExit(1)
 
 
 def target() -> int:
@@ -35,14 +50,6 @@ def target() -> int:
 
 def main():
     """Launch timeline UI panel with traced steps."""
-
-    # Avoid putting this repo's full `Lib/` on sys.path (it may not match the
-    # running interpreter version). We only add `Lib/idlelib` so we can import
-    # the timeline modules without shadowing unrelated stdlib modules.
-    import sys
-    idlelib_dir = "./Lib/idlelib"
-    if idlelib_dir not in sys.path:
-        sys.path.insert(0, idlelib_dir)
 
     import timeline_tracer
     from timeline_pipeline import events_to_steps

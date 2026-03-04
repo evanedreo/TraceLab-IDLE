@@ -77,6 +77,12 @@ class TimelinePanel(tk.Frame):
         details_scroll.grid(row=1, column=1, sticky="ns")
         self._details.configure(yscrollcommand=details_scroll.set)
 
+    def clear(self) -> None:
+        """Reset the panel, removing all steps and details."""
+        self._steps = []
+        self._list.delete(0, tk.END)
+        self._set_details(header="No step selected", body="")
+
     def set_steps(self, steps: list[dict[str, Any]]) -> None:
         """Accept UI-ready step dicts and populate the step list."""
         self._steps = list(steps or [])
