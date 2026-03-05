@@ -84,6 +84,17 @@ class EventsToStepsTest(unittest.TestCase):
 
         self.assertEqual(steps[1]["diff"]["removed"], {"b": "2"})
 
+    def test_private_names_are_not_filtered(self):
+        events = [
+            _make_event(0, 1, locals_={"_private": 1, "__dunder__": 2, "x": 3}),
+        ]
+        steps = events_to_steps(events)
+
+        self.assertIn("_private", steps[0]["locals"])
+        self.assertIn("__dunder__", steps[0]["locals"])
+        self.assertEqual(steps[0]["locals"]["_private"], "1")
+        self.assertEqual(steps[0]["locals"]["__dunder__"], "2")
+
     def test_locals_values_are_string_reprs(self):
         events = [_make_event(0, 1, locals_={"x": [1, 2, 3]})]
         steps = events_to_steps(events)
