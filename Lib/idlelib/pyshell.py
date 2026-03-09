@@ -36,6 +36,7 @@ from idlelib.config import idleConf
 from idlelib.delegator import Delegator
 from idlelib import debugger
 from idlelib import debugger_r
+from idlelib.timeline_controller import TimelineController
 from idlelib.editor import EditorWindow, fixwordbreaks
 from idlelib.filelist import FileList
 from idlelib.outwin import OutputWindow
@@ -905,8 +906,10 @@ class PyShell(OutputWindow):
         text.bind("<<end-of-file>>", self.eof_callback)
         text.bind("<<open-stack-viewer>>", self.open_stack_viewer)
         text.bind("<<toggle-debugger>>", self.toggle_debugger)
+        text.bind("<<toggle-timeline>>", self.toggle_timeline)
         text.bind("<<toggle-jit-stack-viewer>>", self.toggle_jit_stack_viewer)
         text.bind("<<copy-with-prompts>>", self.copy_with_prompts_callback)
+        self.timeline_controller = TimelineController(self)
         if use_subprocess:
             text.bind("<<view-restart>>", self.view_restart_mark)
             text.bind("<<restart-shell>>", self.restart_shell)
@@ -1086,15 +1089,40 @@ class PyShell(OutputWindow):
         state = 'disabled' if self.executing else 'normal'
         self.update_menu_state('debug', '*tack*iewer', state)
 
+    # ---- Timeline integration ------------------------------------------------
+
+    def toggle_timeline(self, event=None):
+        tc = self.timeline_controller
+        tc.toggle_panel()
+        self.set_timeline_indicator()
+        if tc.is_open:
+            self.resetoutput()
+            self.console.write("[TIMELINE ON]\n")
+            self.showprompt()
+        else:
+            self.resetoutput()
+            self.console.write("[TIMELINE OFF]\n")
+            self.showprompt()
+        return "break"
+
+    def set_timeline_indicator(self):
+        self.setvar("<<toggle-timeline>>", self.timeline_controller.is_open)
+
+    # ---- Execution hooks -----------------------------------------------------
+
     def beginexecuting(self):
         "Helper for ModifiedInterpreter"
         self.resetoutput()
         self.executing = True
+        if self.timeline_controller.is_open:
+            self.timeline_controller.on_run_start()
 
     def endexecuting(self):
         "Helper for ModifiedInterpreter"
         self.executing = False
         self.canceled = False
+        if self.timeline_controller.is_open:
+            self.timeline_controller.on_run_end()
         self.showprompt()
 
     def close(self):
@@ -1115,6 +1143,7 @@ class PyShell(OutputWindow):
     def _close(self):
         "Extend EditorWindow._close(), shut down debugger and execution server"
         self.close_debugger()
+        self.timeline_controller.close()
         if use_subprocess:
             self.interp.kill_subprocess()
         # Restore std streams
