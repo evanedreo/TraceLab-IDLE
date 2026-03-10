@@ -580,15 +580,24 @@ class Executive:
             self.autocomplete = autocomplete.AutoComplete()
         else:
             self.locals = {}
+        self._timeline_trace_config = None
 
     def runcode(self, code):
         global interruptible
+        timeline_started = False
         try:
             self.user_exc_info = None
             interruptible = True
+            if self._timeline_trace_config:
+                from idlelib import timeline_tracer
+                timeline_tracer.start(**self._timeline_trace_config)
+                timeline_started = True
             try:
                 exec(code, self.locals)
             finally:
+                if timeline_started:
+                    from idlelib import timeline_tracer
+                    timeline_tracer.stop()
                 interruptible = False
         except SystemExit as e:
             if e.args:  # SystemExit called with an argument.
@@ -637,22 +646,23 @@ class Executive:
         capture_globals: bool = True,
         max_snapshot_items: int = 25,
         max_repr: int = 200,
+        trace_threads: bool = True,
     ):
-        from idlelib import timeline_tracer
-
-        timeline_tracer.start(
-            max_events=max_events,
-            on_overflow=on_overflow,
-            capture_locals=capture_locals,
-            capture_globals=capture_globals,
-            max_snapshot_items=max_snapshot_items,
-            max_repr=max_repr,
-        )
+        self._timeline_trace_config = {
+            "max_events": max_events,
+            "on_overflow": on_overflow,
+            "capture_locals": capture_locals,
+            "capture_globals": capture_globals,
+            "max_snapshot_items": max_snapshot_items,
+            "max_repr": max_repr,
+            "trace_threads": trace_threads,
+        }
         return True
 
     def stop_timeline_tracing(self):
         from idlelib import timeline_tracer
 
+        self._timeline_trace_config = None
         timeline_tracer.stop()
         return True
 
@@ -666,6 +676,14 @@ class Executive:
         from idlelib import timeline_tracer
 
         return timeline_tracer.get_events()
+
+    def get_timeline_target_file(self):
+        """Return current user script path when available."""
+        try:
+            filename = self.locals.get("__file__")
+        except Exception:
+            return ""
+        return filename if isinstance(filename, str) else ""
 
     def timeline_tracing_status(self):
         from idlelib import timeline_tracer
